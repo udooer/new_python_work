@@ -58,13 +58,18 @@ class ShaneWhistleDetector():
         self.sensitivity = 211
         
         # Parameters for bandPassWithSNRFilter function
-        self.start_fre = 2000
+        self.start_fre = 3000
         self.end_fre = 10000
-        self.threshold_SNR = 2
+        self.threshold_SNR = 80
 
         # Parameters for whistleFeatureFilter function
-        self.frequency_width = 50
+        self.frequency_width = 300
+        self.defined_SNR = 20
         self.time_duration = 0.02
+
+        # Parameters for DBSCANCluster function
+        self.eps = 20
+        self.min_samples = 5
 
         # Parameters for detectWhistle function
         self.whistle_detector_frame = 2
@@ -81,7 +86,7 @@ class ShaneWhistleDetector():
         print("######################################################")
         print("     1. Threshold: \t{}".format(self.threshold_click_removal))
         print("     2. Power: \t\t{}".format(self.power_click_removal))
-        print("")
+        print()
         print("------------------------------------------------------")
         print("######################################################")
         print("#         Parameters for computeSTFT function        #")
@@ -90,28 +95,36 @@ class ShaneWhistleDetector():
         print("     2. Overlab: \t\t{}".format(self.overlab))
         print("     3. Window Type: \t\t{}".format(self.window_type))
         print("     4. Hydrophone Sensitivity: {}".format(self.overlab))
-        print("")
+        print()
         print("------------------------------------------------------")
         print("######################################################")
         print("#    Parameters for bandPassWithSNRFilter function   #")
         print("######################################################")
         print("     1. Start Frequency: \t{} Hz".format(self.start_fre))
         print("     2. End Frequency: \t\t{} Hz".format(self.end_fre))
-        print("     3. SNR Threshold: \t\t{}".format(self.threshold_SNR))
-        print("")
+        print("     3. SNR Threshold: \t\t{} dB".format(self.threshold_SNR))
+        print()
         print("------------------------------------------------------")
         print("######################################################")
         print("#    Parameters for whistleFeatureFilter function    #")
         print("######################################################")
         print("     1. Frequency Width: \t{} Hz".format(self.frequency_width))
+        print("     1. self-defined SNR: \t{} dB".format(self.defined_SNR))
         print("     2. Time duration: \t\t{} Sec".format(self.time_duration))
+        print()
+        print("------------------------------------------------------")
+        print("######################################################")
+        print("#        Parameters for DBSCANCluster function       #")
+        print("######################################################")
+        print("     1. Eps range: \t{}".format(self.eps))
+        print("     2. Minimum samples: {}".format(self.min_samples))
         print()
         print("------------------------------------------------------")
         print("######################################################")
         print("#        Parameters for detectWhistle function       #")
         print("######################################################")
         print("     1. Whistle Detector Window: {} Sec".format(self.whistle_detector_frame))
-        print("")
+        print()
         print("------------------------------------------------------")
 
 
@@ -143,10 +156,9 @@ class ShaneWhistleDetector():
         fft_half_number = math.ceil((self.fft_number+1)/2)
 
         total_stft_frame = (self.whistle_detector_frame*self.fs-self.fft_number)//hop_size+1
-        total_sample_count = (total_stft_frame-1)*hop_size+self.fft_number
+        self.total_sample_count = (total_stft_frame-1)*hop_size+self.fft_number
 
-        sample_time_series = self.data[self.time_start_index:self.time_start_index+total_sample_count]
-        self.time_start_index += total_sample_count
+        sample_time_series = self.data[self.time_start_index:self.time_start_index+self.total_sample_count]
         
         
         end_index = self.fft_number
@@ -174,50 +186,45 @@ class ShaneWhistleDetector():
     #   1. start freq
     #   2. end freq
     #   3. SNR threshold
-    def bandPassWithSNRFilter(self, median_blur):
-        df = self.fs/self.fft_number
-        start_index = math.floor((self.start_fre)/df)
-        end_index = math.ceil((self.end_fre)/df)
 
-        noise_start_fre = 15000
-        noise_end_fre = 20000
-        noise_start_index = math.floor((noise_start_fre)/df)
-        noise_end_index = math.ceil((noise_end_fre)/df)
 
-        median_f = np.median(median_blur[:,noise_start_index:noise_end_index],axis=1)
-        median_f = median_f.reshape(len(median_f),1)
-        SNR = 10*np.log10(median_blur[:,start_index:end_index]/median_f)
-        high_SNR = SNR>self.threshold_SNR
-        return high_SNR
-
-    #####################################################
-    # Fifth step, narrow bandwidth & long time duration #
-    #####################################################
+    ##################################
+    # Fifth step, long time duration #
+    ##################################
     # Parameters:
     #   1. frequency width
     #   2. time duration
-    def whistleFeatureFilter(self, high_SNR):
+    def whistleFeatureFilter(self, median_blur):
         hop_size = math.ceil(self.fft_number*(1-self.overlab))
         dt = hop_size/self.fs
         df = self.fs/self.fft_number
+        start_index = math.floor((self.start_fre)/df)
+        end_index = math.ceil((self.end_fre)/df)
+        width_size = math.ceil(self.frequency_width/2/df)
+        ## high PSD level and high SNR reference to narrow band level
+        SNR = []
+        for row in median_blur:
+            p2 = row[start_index-width_size:end_index-width_size]
+            p1 = row[start_index:end_index]
+            p3 = row[start_index+width_size:end_index+width_size]
+            snr = 2*p1-(p2+p3)
+            SNR.append(snr)
+        SNR = np.array(SNR)
 
+        SNR_filter = (median_blur[:, start_index:end_index]>self.threshold_SNR)*(SNR>self.defined_SNR)
+        ## Long time duration
         col_size = math.ceil(self.time_duration/dt)
-        row_size = math.ceil(self.frequency_width/df)
 
-        image_row = high_SNR.T.shape[0]
-        image_col = high_SNR.T.shape[1]
-
-        padding = np.zeros((image_row+row_size-1, image_col+col_size-1))
-        padding[row_size//2:row_size//2+image_row,col_size//2:col_size//2+image_col] = high_SNR.T
-
+        image_row = SNR_filter.T.shape[0]
+        image_col = SNR_filter.T.shape[1]
+        padding = np.zeros((image_row, image_col+col_size-1))
+        padding[:,col_size//2:col_size//2+image_col] = SNR_filter.T
         detection = np.zeros((image_row, image_col))
-        for i in range(image_row):
-            for j in range(image_col):
-                segment = padding[i:i+row_size,j:j+col_size]
-                detection[i,j] = np.sum(np.sum(segment, axis=0)>0)
+        for i in range(col_size):
+            detection += padding[:,i:i+image_col]
         return detection==col_size
 
-    def DBSCANCluster(self, detection):
+    def DBSCANCluster(self, detection, filename):
         hop_size = math.ceil(self.fft_number*(1-self.overlab))
         df = self.fs/self.fft_number
         dt = hop_size/self.fs
@@ -225,29 +232,33 @@ class ShaneWhistleDetector():
         (x,y) = np.nonzero(detection.T)
         if len(x):
             point = np.array([x,y]).T
-            clustering=DBSCAN(eps=20,min_samples=10).fit(point)
+            clustering=DBSCAN(eps=self.eps,min_samples=self.min_samples).fit(point)
 
             point_without_outlier = point[clustering.labels_!=-1]
             new_label = clustering.labels_[clustering.labels_!=-1]
             point_x = point_without_outlier.T[0]*dt+self.time_start_index/self.fs
+            self.time_start_index += self.total_sample_count
             point_y = (point_without_outlier.T[1]*df+self.start_fre)/1000
-            
+
             length = len(set(new_label))
-            self.whistle_count += length
             col = ['Start Time','End Time','Start Freq','End Freq','Duration']
             feature = []
             for i in range(length):
                 cluster_x = point_x[new_label==i]
                 cluster_y = point_y[new_label==i]
-                feature.append([cluster_x[0], cluster_x[-1], cluster_y[0], cluster_y[-1], cluster_x[-1]-cluster_x[0]])
-                self.whistle_duration += cluster_x[-1]-cluster_x[0]
+                if(cluster_x[-1]-cluster_x[0]>0.05):
+                    feature.append([cluster_x[0], cluster_x[-1], cluster_y[0], cluster_y[-1], cluster_x[-1]-cluster_x[0]])
+                    self.whistle_duration += cluster_x[-1]-cluster_x[0]
+                    self.whistle_count += 1
             df = pd.DataFrame(feature, columns=col)
-            if os.path.isfile('whislte_detection_outcome.csv'):
-                df.to_csv('whislte_detection_outcome.csv', mode='a', header=False, index=False)
+            if os.path.isfile(filename):
+                df.to_csv(filename, mode='a', header=False, index=False)
             else:
-                df.to_csv('whislte_detection_outcome.csv', mode='w', header=True, index=False)  
+                df.to_csv(filename, mode='w', header=True, index=False)
+        else:
+            self.time_start_index += self.total_sample_count  
     
-    def detectWhistle(self, sec=0):
+    def detectWhistle(self, sec=0, csv_file='whislte_detection_outcome.csv'):
         wave_file_long = len(self.data)/self.fs
         if(sec>wave_file_long):
             print("Input parameter sec is too large, the max number is {}.".format(wave_file_long))
@@ -276,13 +287,10 @@ class ShaneWhistleDetector():
             median_blur = cv2.medianBlur(PSD_clickRemoval.astype(np.float32),3)
             t_3 = time.time()
             self.median_blur_time.append(t_3-t_2)
-            high_SNR = self.bandPassWithSNRFilter(median_blur)
-            t_4 = time.time()
-            self.high_SNR_time.append(t_4-t_3)
-            detection = self.whistleFeatureFilter(high_SNR)
+            detection = self.whistleFeatureFilter(median_blur)
             t_5 = time.time()
-            self.detection_time.append(t_5-t_4)
-            self.DBSCANCluster(detection)
+            self.detection_time.append(t_5-t_3)
+            self.DBSCANCluster(detection, csv_file)
             t_6 = time.time()
             self.clustering_time.append(t_6-t_5)
         end = time.time()

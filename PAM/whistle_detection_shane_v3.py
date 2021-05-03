@@ -58,7 +58,7 @@ class ShaneWhistleDetector():
         self.sensitivity = 211
         
         # Parameters for bandPassWithSNRFilter function
-        self.start_fre = 2000
+        self.start_fre = 2500
         self.end_fre = 10000
         self.threshold_SNR = 2
 
@@ -211,13 +211,11 @@ class ShaneWhistleDetector():
         padding[row_size//2:row_size//2+image_row,col_size//2:col_size//2+image_col] = high_SNR.T
 
         detection = np.zeros((image_row, image_col))
-        for i in range(image_row):
-            for j in range(image_col):
-                segment = padding[i:i+row_size,j:j+col_size]
-                detection[i,j] = np.sum(np.sum(segment, axis=0)>0)
+        for i in range(col_size):
+            detection += padding[:,i:i+image_col]
         return detection==col_size
 
-    def DBSCANCluster(self, detection):
+    def DBSCANCluster(self, detection, filename):
         hop_size = math.ceil(self.fft_number*(1-self.overlab))
         df = self.fs/self.fft_number
         dt = hop_size/self.fs
@@ -233,21 +231,22 @@ class ShaneWhistleDetector():
             point_y = (point_without_outlier.T[1]*df+self.start_fre)/1000
             
             length = len(set(new_label))
-            self.whistle_count += length
             col = ['Start Time','End Time','Start Freq','End Freq','Duration']
             feature = []
             for i in range(length):
                 cluster_x = point_x[new_label==i]
                 cluster_y = point_y[new_label==i]
-                feature.append([cluster_x[0], cluster_x[-1], cluster_y[0], cluster_y[-1], cluster_x[-1]-cluster_x[0]])
-                self.whistle_duration += cluster_x[-1]-cluster_x[0]
+                if(cluster_x[-1]-cluster_x[0]>0.05):
+                    feature.append([cluster_x[0], cluster_x[-1], cluster_y[0], cluster_y[-1], cluster_x[-1]-cluster_x[0]])
+                    self.whistle_duration += cluster_x[-1]-cluster_x[0]
+                    self.whistle_count += 1
             df = pd.DataFrame(feature, columns=col)
-            if os.path.isfile('whislte_detection_outcome.csv'):
-                df.to_csv('whislte_detection_outcome.csv', mode='a', header=False, index=False)
+            if os.path.isfile(filename):
+                df.to_csv(filename, mode='a', header=False, index=False)
             else:
-                df.to_csv('whislte_detection_outcome.csv', mode='w', header=True, index=False)  
+                df.to_csv(filename, mode='w', header=True, index=False)  
     
-    def detectWhistle(self, sec=0):
+    def detectWhistle(self, sec=0, csv_file='whislte_detection_outcome.csv'):
         wave_file_long = len(self.data)/self.fs
         if(sec>wave_file_long):
             print("Input parameter sec is too large, the max number is {}.".format(wave_file_long))
@@ -282,7 +281,7 @@ class ShaneWhistleDetector():
             detection = self.whistleFeatureFilter(high_SNR)
             t_5 = time.time()
             self.detection_time.append(t_5-t_4)
-            self.DBSCANCluster(detection)
+            self.DBSCANCluster(detection, csv_file)
             t_6 = time.time()
             self.clustering_time.append(t_6-t_5)
         end = time.time()
