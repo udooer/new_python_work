@@ -80,6 +80,9 @@ class ShaneWhistleDetector():
 
     # Print out all whislte detector parameters
     def printSetting(self):
+        hop_size = math.ceil(self.fft_number*(1-self.overlab))
+        dt = hop_size/self.fs
+        df = self.fs/self.fft_number
         print("######################################################")
         print("#         Parameters for removeClick function        #")
         print("######################################################")
@@ -93,7 +96,9 @@ class ShaneWhistleDetector():
         print("     1. FFT Number: \t\t{}".format(self.fft_number))
         print("     2. Overlab: \t\t{}".format(self.overlab))
         print("     3. Window Type: \t\t{}".format(self.window_type))
-        print("     4. Hydrophone Sensitivity: {}".format(self.overlab))
+        print("     4. Hydrophone Sensitivity: {}".format(self.sensitivity))
+        print("     dt: \t\t{}".format(dt))
+        print("     df: \t\t{}".format(df))
         print()
         print("------------------------------------------------------")
         print("######################################################")
